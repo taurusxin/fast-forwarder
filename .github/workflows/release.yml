@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Check release version
+        run: test "v$(sed -n 's/^APP_VERSION=//p' install.sh)" = "$GITHUB_REF_NAME"
+      - name: Build web
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm lint
+          pnpm build
+      - name: Build Linux binaries
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o dist/fast-forwarder_linux_amd64 .
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o dist/fast-forwarder_linux_arm64 .
+          (cd dist && sha256sum fast-forwarder_linux_amd64 fast-forwarder_linux_arm64 > SHA256SUMS)
+          sh -n install.sh
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/fast-forwarder_linux_amd64 \
+            dist/fast-forwarder_linux_arm64 \
+            dist/SHA256SUMS \
+            install.sh \
+            --verify-tag --generate-notes
