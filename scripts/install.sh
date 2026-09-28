@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 # ---------- 基本配置 ----------
 
-APP_VERSION=0.1.2
+APP_VERSION=0.1.3
 REPOSITORY=taurusxin/fast-forwarder
 APP=fast-forwarder
 DATA_DIR=/var/lib/fast-forwarder
@@ -30,6 +30,14 @@ ARCH=""
 CURRENT_LISTEN=""
 WEB_HOST=""
 WEB_PORT=""
+COLOR_RED=""
+COLOR_GREEN=""
+COLOR_YELLOW=""
+COLOR_BLUE=""
+COLOR_CYAN=""
+COLOR_BOLD=""
+COLOR_DIM=""
+COLOR_RESET=""
 
 # ---------- 通用函数 ----------
 
@@ -39,8 +47,43 @@ cleanup() {
   fi
 }
 
+init_colors() {
+  if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != dumb ]]; then
+    COLOR_RED=$'\033[31m'
+    COLOR_GREEN=$'\033[32m'
+    COLOR_YELLOW=$'\033[33m'
+    COLOR_BLUE=$'\033[34m'
+    COLOR_CYAN=$'\033[36m'
+    COLOR_BOLD=$'\033[1m'
+    COLOR_DIM=$'\033[2m'
+    COLOR_RESET=$'\033[0m'
+  fi
+}
+
+banner() {
+  local action="$1"
+  printf '\n%b%s%b\n' "$COLOR_BOLD$COLOR_BLUE" "Fast Forwarder v$APP_VERSION" "$COLOR_RESET"
+  printf '%b%s%b\n\n' "$COLOR_DIM" "$action · Linux $ARCH · $INIT_SYSTEM" "$COLOR_RESET"
+}
+
+step() {
+  printf '%b==>%b %s\n' "$COLOR_CYAN$COLOR_BOLD" "$COLOR_RESET" "$*"
+}
+
+info() {
+  printf '%b  •%b %s\n' "$COLOR_BLUE" "$COLOR_RESET" "$*"
+}
+
+success() {
+  printf '%b  ✓%b %s\n' "$COLOR_GREEN" "$COLOR_RESET" "$*"
+}
+
+warning() {
+  printf '%b  !%b %s\n' "$COLOR_YELLOW" "$COLOR_RESET" "$*"
+}
+
 die() {
-  echo "错误：$*" >&2
+  printf '%b错误：%b%s\n' "$COLOR_RED$COLOR_BOLD" "$COLOR_RESET" "$*" >&2
   exit 1
 }
 
@@ -51,7 +94,8 @@ prompt() {
   local answer=""
 
   if [[ -t 0 || -t 1 ]]; then
-    printf '%s [%s]: ' "$label" "$default_value" >/dev/tty
+    printf '%b%s%b（%b默认：%s%b，直接回车使用默认值）：' \
+      "$COLOR_CYAN" "$label" "$COLOR_RESET" "$COLOR_GREEN" "$default_value" "$COLOR_RESET" >/dev/tty
     IFS= read -r answer </dev/tty || die "无法读取输入"
   fi
   printf -v "$variable_name" '%s' "${answer:-$default_value}"
@@ -62,7 +106,9 @@ confirm() {
   local answer=""
 
   if [[ -t 0 || -t 1 ]]; then
-    printf '%s 输入 yes 确认：' "$label" >/dev/tty
+    printf '%b%s%b 输入 %byes%b 确认（%b默认：否%b）：' \
+      "$COLOR_YELLOW" "$label" "$COLOR_RESET" "$COLOR_BOLD" "$COLOR_RESET" \
+      "$COLOR_GREEN" "$COLOR_RESET" >/dev/tty
     IFS= read -r answer </dev/tty || true
   fi
   [[ "$answer" == yes ]]
@@ -71,7 +117,23 @@ confirm() {
 download() {
   local url="$1"
   local destination="$2"
-  curl --fail --location --retry 3 --show-error "$url" --output "$destination"
+  curl --fail --location --retry 3 --silent --show-error "$url" --output "$destination"
+}
+
+run_quiet() {
+  local description="$1"
+  shift
+  local log_file="$WORK_DIR/command.log"
+
+  step "$description"
+  if "$@" >"$log_file" 2>&1; then
+    success "${description}完成"
+    return
+  fi
+
+  printf '%b%s失败，最近的输出如下：%b\n' "$COLOR_RED" "$description" "$COLOR_RESET" >&2
+  tail -n 40 "$log_file" >&2 || true
+  exit 1
 }
 
 verify_sha256() {
@@ -114,17 +176,18 @@ detect_platform() {
 install_dependencies() {
   case "$PACKAGE_MANAGER" in
     apk)
-      apk add --no-cache bash ca-certificates curl tar iproute2
+      run_quiet "安装系统依赖" apk add --no-cache bash ca-certificates curl tar iproute2
       ;;
     apt)
-      apt-get update
-      env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl tar iproute2
+      run_quiet "更新软件源" apt-get update
+      run_quiet "安装系统依赖" env DEBIAN_FRONTEND=noninteractive \
+        apt-get install -y ca-certificates curl tar iproute2
       ;;
     dnf)
-      dnf install -y ca-certificates curl tar iproute
+      run_quiet "安装系统依赖" dnf install -y ca-certificates curl tar iproute
       ;;
     yum)
-      yum install -y ca-certificates curl tar iproute
+      run_quiet "安装系统依赖" yum install -y ca-certificates curl tar iproute
       ;;
   esac
 }
@@ -136,15 +199,18 @@ acquire_app() {
   local checksum_file="$WORK_DIR/SHA256SUMS"
   local expected
 
+  step "准备 Fast Forwarder"
   if [[ -n "$local_binary" && -f "$local_binary" ]]; then
+    info "使用本地预构建文件：$local_binary"
     cp "$local_binary" "$WORK_DIR/fast-forwarder"
   elif [[ -n "$REPO_ROOT" && -f "$REPO_ROOT/go.mod" && -f "$REPO_ROOT/web/package.json" ]]; then
     command -v go >/dev/null 2>&1 || die "缺少 Go 1.27.1，请使用预构建发行包"
     command -v pnpm >/dev/null 2>&1 || die "缺少 pnpm，请使用预构建发行包"
-    (cd "$REPO_ROOT/web" && pnpm install --frozen-lockfile && pnpm build)
-    (cd "$REPO_ROOT" && go build -o "$WORK_DIR/fast-forwarder" .)
+    run_quiet "从源码构建 Fast Forwarder" bash -c \
+      'cd "$1/web" && pnpm install --frozen-lockfile && pnpm build && cd "$1" && go build -o "$2" .' \
+      _ "$REPO_ROOT" "$WORK_DIR/fast-forwarder"
   else
-    echo "下载 Fast Forwarder v$APP_VERSION ($ARCH)..."
+    info "下载 v$APP_VERSION Linux/$ARCH 发行文件"
     download \
       "https://github.com/$REPOSITORY/releases/download/v$APP_VERSION/fast-forwarder_linux_$ARCH" \
       "$WORK_DIR/fast-forwarder"
@@ -155,6 +221,7 @@ acquire_app() {
     verify_sha256 "$WORK_DIR/fast-forwarder" "$expected"
   fi
   chmod 755 "$WORK_DIR/fast-forwarder"
+  success "Fast Forwarder 已准备并通过校验"
 }
 
 acquire_gost() {
@@ -162,13 +229,15 @@ acquire_gost() {
   local archive_path="$WORK_DIR/$archive"
   local expected=""
 
+  step "准备 GOST"
   if [[ -x "$GOST_BIN" ]] && "$GOST_BIN" -V 2>&1 | grep -q "gost v$GOST_VERSION"; then
-    echo "沿用已安装的 GOST $GOST_VERSION"
+    info "沿用已安装的 GOST v$GOST_VERSION"
     cp "$GOST_BIN" "$WORK_DIR/gost"
+    success "GOST 已准备"
     return
   fi
 
-  echo "下载 GOST $GOST_VERSION ($ARCH)..."
+  info "下载 GOST v$GOST_VERSION Linux/$ARCH"
   if [[ -n "$REPO_ROOT" && -f "$REPO_ROOT/dist/$archive" ]]; then
     cp "$REPO_ROOT/dist/$archive" "$archive_path"
   else
@@ -185,6 +254,7 @@ acquire_gost() {
   tar -xzf "$archive_path" -C "$WORK_DIR"
   [[ -f "$WORK_DIR/gost" ]] || die "GOST 下载包缺少二进制"
   chmod 755 "$WORK_DIR/gost"
+  success "GOST 已准备并通过校验"
 }
 
 # ---------- 监听配置 ----------
@@ -224,19 +294,26 @@ choose_listen() {
   local default_port
   default_port="$(random_port)"
 
+  step "配置 Web 管理地址"
+
   CURRENT_LISTEN="$(existing_listen)"
   if [[ -n "$CURRENT_LISTEN" ]]; then
     default_host="${CURRENT_LISTEN%:*}"
     default_port="${CURRENT_LISTEN##*:}"
+    info "检测到当前服务地址：$CURRENT_LISTEN，将作为本次默认值"
+  else
+    info "默认监听 0.0.0.0，可通过服务器 IP 访问；输入 127.0.0.1 可限制为仅本机访问"
   fi
 
   if [[ -n "${FAST_FORWARDER_LISTEN_HOST:-}" ]]; then
     WEB_HOST="$FAST_FORWARDER_LISTEN_HOST"
+    info "使用环境变量指定的监听地址：$WEB_HOST"
   else
     prompt WEB_HOST "Web 管理监听地址" "$default_host"
   fi
   if [[ -n "${FAST_FORWARDER_LISTEN_PORT:-}" ]]; then
     WEB_PORT="$FAST_FORWARDER_LISTEN_PORT"
+    info "使用环境变量指定的管理端口：$WEB_PORT"
   else
     prompt WEB_PORT "Web 管理端口" "$default_port"
   fi
@@ -249,6 +326,37 @@ choose_listen() {
     if [[ -z "$CURRENT_LISTEN" || "${CURRENT_LISTEN##*:}" != "$WEB_PORT" ]]; then
       ss -H -ltn "sport = :$WEB_PORT" | grep -q . && die "端口 $WEB_PORT 已被占用"
     fi
+  fi
+  success "Web 管理地址已确定：$WEB_HOST:$WEB_PORT"
+  return 0
+}
+
+public_ipv4() {
+  local address url
+  for url in \
+    https://api.ipify.org \
+    https://ifconfig.me/ip \
+    https://icanhazip.com; do
+    address="$(
+      curl --ipv4 --fail --silent --show-error --connect-timeout 3 --max-time 6 \
+        "$url" 2>/dev/null | tr -d '[:space:]' || true
+    )"
+    if valid_ipv4 "$address"; then
+      printf '%s' "$address"
+      return 0
+    fi
+  done
+  return 0
+}
+
+local_ipv4() {
+  local address
+  address="$(
+    ip -4 route get 1.1.1.1 2>/dev/null \
+      | awk '{for (i=1; i<=NF; i++) if ($i=="src") {print $(i+1); exit}}' || true
+  )"
+  if valid_ipv4 "$address"; then
+    printf '%s' "$address"
   fi
   return 0
 }
@@ -264,6 +372,7 @@ stop_service() {
 }
 
 install_files() {
+  step "安装程序文件"
   install -d -m 700 "$DATA_DIR"
   install -d -m 755 "$SHARE_DIR"
   install -m 755 "$WORK_DIR/fast-forwarder" "$BIN"
@@ -277,6 +386,7 @@ install_files() {
       "$SHARE_DIR/install.sh"
     chmod 755 "$SHARE_DIR/install.sh"
   fi
+  success "程序文件已安装到 $BIN"
 }
 
 install_systemd() {
@@ -319,14 +429,18 @@ SERVICE
 }
 
 install_service() {
+  step "创建并启动系统服务"
   if [[ "$INIT_SYSTEM" == systemd ]]; then
     install_systemd
   else
     install_openrc
   fi
+  success "系统服务已启动，并已设置为开机自动运行"
 }
 
 uninstall_app() {
+  banner "卸载"
+  step "停止服务并移除程序文件"
   stop_service
   if [[ "$INIT_SYSTEM" == systemd ]]; then
     systemctl disable "$APP" 2>/dev/null || true
@@ -338,29 +452,55 @@ uninstall_app() {
   fi
   rm -f "$BIN"
   rm -rf "$SHARE_DIR"
-  if confirm "删除数据库及配置目录 $DATA_DIR？"; then
+  success "服务与程序文件已移除"
+  if confirm "是否同时删除数据库和全部规则（$DATA_DIR）？"; then
     rm -rf "$DATA_DIR"
+    success "数据库与配置目录已删除"
+  else
+    info "数据库与配置仍保留在 $DATA_DIR"
   fi
-  echo "卸载完成"
+  printf '\n%b卸载完成。%b\n' "$COLOR_GREEN$COLOR_BOLD" "$COLOR_RESET"
 }
 
 # ---------- 主流程 ----------
 
 show_result() {
-  echo
-  echo "安装完成。"
-  echo "监听地址：$WEB_HOST:$WEB_PORT"
+  local public_ip=""
+  local private_ip=""
+
+  printf '\n%b安装完成%b\n' "$COLOR_GREEN$COLOR_BOLD" "$COLOR_RESET"
+  printf '%b%s%b\n' "$COLOR_DIM" "────────────────────────────────────────" "$COLOR_RESET"
+  printf 'Fast Forwarder：v%s\n' "$APP_VERSION"
+  printf '监听地址：%s:%s\n' "$WEB_HOST" "$WEB_PORT"
   if [[ "$WEB_HOST" == 0.0.0.0 ]]; then
-    echo "管理页面：http://<服务器 IP>:$WEB_PORT"
+    public_ip="$(public_ipv4)"
+    private_ip="$(local_ipv4)"
+    if [[ -n "$public_ip" ]]; then
+      printf '%b公网访问：%bhttp://%s:%s\n' "$COLOR_CYAN$COLOR_BOLD" "$COLOR_RESET" "$public_ip" "$WEB_PORT"
+    else
+      printf '%b公网访问：%bhttp://<服务器公网 IP>:%s\n' "$COLOR_CYAN$COLOR_BOLD" "$COLOR_RESET" "$WEB_PORT"
+    fi
+    if [[ -n "$private_ip" && "$private_ip" != "$public_ip" ]]; then
+      printf '内网访问：http://%s:%s\n' "$private_ip" "$WEB_PORT"
+    fi
+    warning "如无法访问，请在云服务器安全组或防火墙中放行 TCP 端口 $WEB_PORT"
+  elif [[ "$WEB_HOST" == 127.0.0.1 ]]; then
+    printf '本机访问：http://127.0.0.1:%s\n' "$WEB_PORT"
+    info "远程访问可使用 SSH 隧道：ssh -L $WEB_PORT:127.0.0.1:$WEB_PORT root@<服务器 IP>"
   else
-    echo "管理页面：http://$WEB_HOST:$WEB_PORT"
+    printf '%b管理页面：%bhttp://%s:%s\n' "$COLOR_CYAN$COLOR_BOLD" "$COLOR_RESET" "$WEB_HOST" "$WEB_PORT"
   fi
-  echo "执行 fast-forwarder 可打开交互菜单。"
+  printf '数据目录：%s\n' "$DATA_DIR"
+  printf '%b%s%b\n' "$COLOR_DIM" "────────────────────────────────────────" "$COLOR_RESET"
+  printf '管理命令：%bfast-forwarder%b\n' "$COLOR_BOLD" "$COLOR_RESET"
+  printf '卸载命令：%bbash %s/install.sh uninstall%b\n\n' "$COLOR_BOLD" "$SHARE_DIR" "$COLOR_RESET"
 }
 
 install_app() {
-  install_dependencies
   WORK_DIR="$(mktemp -d)"
+  banner "安装 / 更新"
+  info "系统环境：$PACKAGE_MANAGER · $INIT_SYSTEM · $ARCH"
+  install_dependencies
   acquire_app
   acquire_gost
   choose_listen
@@ -382,4 +522,5 @@ main() {
 
 trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
+init_colors
 main "$@"
