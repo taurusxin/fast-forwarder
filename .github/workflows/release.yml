@@ -26,7 +26,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Check release version
-        run: test "v$(sed -n 's/^APP_VERSION=//p' install.sh)" = "$GITHUB_REF_NAME"
+        run: test "v$(sed -n 's/^APP_VERSION=//p' scripts/install.sh)" = "$GITHUB_REF_NAME"
       - name: Build web
         working-directory: web
         run: |
@@ -38,7 +38,8 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o dist/fast-forwarder_linux_amd64 .
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o dist/fast-forwarder_linux_arm64 .
           (cd dist && sha256sum fast-forwarder_linux_amd64 fast-forwarder_linux_arm64 > SHA256SUMS)
-          sh -n install.sh
+          tar -czf dist/fast-forwarder_installer.tar.gz -C scripts install
+          bash -n scripts/install.sh scripts/install/*.bash scripts/package.sh
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -47,5 +48,6 @@ jobs:
             dist/fast-forwarder_linux_amd64 \
             dist/fast-forwarder_linux_arm64 \
             dist/SHA256SUMS \
-            install.sh \
+            dist/fast-forwarder_installer.tar.gz \
+            'scripts/install.sh#install.sh' \
             --verify-tag --generate-notes

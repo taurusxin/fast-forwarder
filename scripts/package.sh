@@ -1,8 +1,10 @@
-#!/bin/sh
-set -eu
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT/web"
 pnpm install --frozen-lockfile
+pnpm lint
 pnpm build
 cd "$ROOT"
 mkdir -p dist

@@ -3,7 +3,6 @@ package main
 import (
 	"embed"
 	"flag"
-	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -22,13 +21,9 @@ var static embed.FS
 
 func main() {
 	dir := flag.String("data-dir", "/var/lib/fast-forwarder", "data directory")
-	listen := flag.String("listen", "127.0.0.1:8080", "web listen address")
+	listen := flag.String("listen", "0.0.0.0:8080", "web listen address")
 	gostPath := flag.String("gost", "gost", "gost binary")
 	flag.Parse()
-	if len(flag.Args()) > 0 && flag.Arg(0) == "config" {
-		fmt.Println(storage.SavedListen(*dir))
-		return
-	}
 	if len(flag.Args()) == 0 || flag.Arg(0) != "serve" {
 		cli.Run(*dir)
 		return
@@ -41,10 +36,6 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
-	saved, err := storage.EnsureListen(db, *listen)
-	if err != nil {
-		log.Fatal(err)
-	}
 	rules, err := storage.ReadRules(db)
 	if err != nil {
 		log.Fatal(err)
@@ -61,8 +52,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	handler := server.New(db, *dir, saved, manager).Handler(dist)
-	web := &http.Server{Addr: saved, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
-	log.Printf("fast-forwarder listening on %s", saved)
+	handler := server.New(db, *dir, *listen, manager).Handler(dist)
+	web := &http.Server{Addr: *listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	log.Printf("fast-forwarder listening on %s", *listen)
 	log.Fatal(web.ListenAndServe())
 }
