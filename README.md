@@ -8,10 +8,10 @@
 
 ## 一键安装
 
-在 Linux 服务器上运行：
+先进入 Linux 服务器的 root shell（例如运行 `sudo -i`），再执行：
 
 ```sh
-curl -fsSL https://github.com/taurusxin/fast-forwarder/releases/download/v0.1.0/install.sh -o /tmp/fast-forwarder-install.sh && sudo sh /tmp/fast-forwarder-install.sh
+curl -fsSL https://github.com/taurusxin/fast-forwarder/releases/download/v0.1.0/install.sh -o /tmp/fast-forwarder-install.sh && sh /tmp/fast-forwarder-install.sh
 ```
 
 安装脚本会下载并安装 Fast Forwarder 与 GOST，支持 **Debian / Ubuntu、CentOS 系和 Alpine** 的 amd64、arm64 服务器。安装时按提示选择 Web 管理地址和端口；直接回车会使用本机地址和随机端口。完成后，打开脚本显示的地址，首次访问时创建管理员账号。
